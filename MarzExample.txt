@@ -1,0 +1,3 @@
+/path/to/first/spec.fits
+/path/to/second/spec.fits
+/path/to/third/spec.fits wr = [4000, 9000]
