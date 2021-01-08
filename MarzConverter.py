@@ -67,7 +67,7 @@ try:
         Requires the cred.auth file in the same folder as MarzConverter,
         or manually setting a different path.
         """
-        with open('./cred.auth') as f:
+        with open('/home/francio/.cred.auth') as f:
             cred = f.readlines()
         return cred[0].strip('\n'), cred[1].strip('\n')
 
