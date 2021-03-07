@@ -228,6 +228,9 @@ def multiFits2File(args):
 
     maxShape = max([s.shape[1] for s in waveList])
     waveList, fluxList, errorList = padArray(waveList, fluxList, errorList, maxLength = maxShape)
+
+    completeWave(waveList)
+
     writeFits(fluxList, errorList, waveList, fibre = fibreHDU, name = name)
 
 # -------------------------------- ** -------------------------------- #
@@ -327,6 +330,19 @@ def padSingleArray(array, ml = 0):
     paddedArray = np.zeros((1, ml))
     paddedArray[:array.shape[0], :array.shape[1]] = array
     return paddedArray
+
+# -------------------------------- ** -------------------------------- #
+
+def completeWave(array):
+    for wave in array:
+        maxWave = np.max(wave[np.nonzero(wave)])
+        iszero  = np.argwhere(wave == 0).flatten()
+
+        if len(iszero) == 0:
+            continue
+
+        topWave = np.linspace(1.01 * maxWave, 1.1 * maxWave, len(iszero))
+        wave[iszero] = topWave
 
 # -------------------------------- ** -------------------------------- #
 
