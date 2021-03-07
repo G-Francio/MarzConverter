@@ -366,7 +366,7 @@ def writeFits(flux, error, wave, fibre = None, name = 'MarzConverterOutput.fits'
         hduListOut.close()
     except OSError:
         overwrite = input("File already exists, overwrite (Y/n)? ")
-        if overwrite.lower() == "y":
+        if overwrite.lower() == "y" or overwrite == '':
             hduListOut.writeto(name, overwrite = True)
             hduListOut.close()
         else:
