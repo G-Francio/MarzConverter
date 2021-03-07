@@ -563,9 +563,9 @@ def parseSDSS(hdul):
 
     data = np.array([np.array(i) for i in hdul[1].data])
 
-    flux  = data[:, 0]
-    wave  = 10 ** data[:, 1]
-    error = vectRevIVar(data[:, 2], max(flux))
+    flux  = data[:, 0].reshape(1, -1)
+    wave  = (10 ** data[:, 1]).reshape(1, -1)
+    error = vectRevIVar(data[:, 2], max(flux)).reshape(1, -1)
 
     return (wave, flux, error)
     
