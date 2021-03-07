@@ -265,8 +265,16 @@ def parseData(hdul, fileName):
         inst = header['INSTRUME']
     except KeyError:
         inst = None
+
+    if inst is None:
+        try:
+            inst = header['TELESCOP']
+        except KeyError:
+            inst = None
     
-    if inst == 'WFCCD/WF4K-1':
+    if inst is None:
+        return parseGeneric(hdul)
+    elif inst == 'WFCCD/WF4K-1':
         return parseWFCCD(hdul)
     elif re.search('LDSS3-.*', inst) is not None:
         return parseLDSS3(hdul)
@@ -277,9 +285,9 @@ def parseData(hdul, fileName):
     elif inst == 'EFOSC':
         return parseEFOSC(hdul)
     elif inst == 'LRS': # TNG
-        return parseLRS(hdul)
-    elif inst is None:
-        return parseGeneric(hdul)
+        return parseLRS(hdul) 
+    elif inst == 'SDSS 2.5-M':
+        return parseSDSS(hdul)     
     else:
         print("Can't parse fits file, please report log file (/tmp/MarzConverter.log)")
 
@@ -553,7 +561,7 @@ def parseSDSS(hdul):
     
     vectRevIVar = np.vectorize(revIVar)
 
-    data = np.array([np.array(i) for i in hdul.data])
+    data = np.array([np.array(i) for i in hdul[1].data])
 
     flux  = data[:, 0]
     wave  = 10 ** data[:, 1]
