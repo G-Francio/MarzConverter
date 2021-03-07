@@ -540,6 +540,29 @@ def parseGeneric(hdul):
 
     return (wave, flux, error)
 
+
+def parseSDSS(hdul):
+    """
+    Parses information from SDSS spectra.
+    """
+
+    def revIVar(x, m):
+        if x == 0:
+            return m
+        return np.sqrt(1/x)
+    
+    vectRevIVar = np.vectorize(revIVar)
+
+    data = np.array([np.array(i) for i in hdul.data])
+
+    flux  = data[:, 0]
+    wave  = 10 ** data[:, 1]
+    error = vectRevIVar(data[:, 2], max(flux))
+
+    return (wave, flux, error)
+    
+    
+
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
 # -------------------------------- ** -------------------------------- #
