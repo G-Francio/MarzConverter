@@ -33,5 +33,5 @@ The wavelength range can be set using the following: `"wr = [w_1, w_2]"`, or, wi
 The wavelength range has to be given in appropriate units (same as the input spectrum).
 
 ### Example
-`python MarzConverter.py /path/to/spec.fits wr=[w_1, w_2] /path/to/outSpec`  
+`python MarzConverter.py /path/to/spec.fits wr=[w_1,w_2] /path/to/outSpec`  
 `python MarzConverter.py /path/to/specList.txt /path/to/outSpec`
