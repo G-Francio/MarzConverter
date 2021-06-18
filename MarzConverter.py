@@ -290,7 +290,9 @@ def parseData(hdul, fileName):
     elif inst == 'LRS': # TNG
         return parseLRS(hdul) 
     elif inst == 'SDSS 2.5-M':
-        return parseSDSS(hdul)     
+        return parseSDSS(hdul)
+    elif inst == 'LAMOST':
+        return parseLAMOST(hdul)  
     else:
         print("Can't parse fits file, please report log file (/tmp/MarzConverter.log)")
 
@@ -582,6 +584,26 @@ def parseSDSS(hdul):
     flux  = data[:, 0].reshape(1, -1)
     wave  = (10 ** data[:, 1]).reshape(1, -1)
     error = vectRevIVar(data[:, 2], max(flux)).reshape(1, -1)
+
+    return (wave, flux, error)
+
+def parseLAMOST(hdul):
+    """
+    Parses information from LAMOST spectra.
+    """
+
+    def revIVar(x, m):
+        if x == 0 or x < 0:
+            return m
+        return np.sqrt(1/x)
+    
+    vectRevIVar = np.vectorize(revIVar)
+
+    data = np.array([np.array(i) for i in hdul[0].data])
+
+    flux  = data[0, :].reshape(1, -1)
+    wave  = data[2, :].reshape(1, -1)
+    error = vectRevIVar(data[1, :], max(flux)).reshape(1, -1)
 
     return (wave, flux, error)
     
