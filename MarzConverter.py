@@ -30,6 +30,8 @@ from astropy.io import fits
 import numpy as np
 import os.path as p, re
 
+from tqdm import tqdm
+
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
 # TODO: Centre on screen if cut wave -> Theoretically correct, in practice does not work
@@ -215,7 +217,7 @@ def multiFits2File(args):
     waveList, fluxList, errorList, nameList = [], [], [], []
     specFiles = readSpecList(args[1])
     
-    for spec in specFiles:
+    for spec in tqdm(specFiles):
         specFileName = p.splitext(spec[0])[0].split('/')[-1]
         wave, flux, error = fits2array(spec[0], waveRange = spec[1])
         nameList.append(specFileName)
