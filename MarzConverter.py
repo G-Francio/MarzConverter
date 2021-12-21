@@ -316,6 +316,14 @@ def parseData(hdul, fileName):
         except KeyError:
             inst = None
 
+    try:
+        origin = header["ORIGIN"]
+    except KeyError:
+        origin = None
+
+    if origin is not None and origin == 'Astrocook':
+        return parseAstrocook(hdul)
+
     if inst is None:
         return parseGeneric(hdul)
     elif inst == "WFCCD/WF4K-1":
@@ -669,6 +677,23 @@ def parseLAMOST(hdul):
     error = vectRevIVar(data[1, :], max(flux)).reshape(1, -1)
 
     return (wave, flux, error)
+    
+
+def parseAstrocook(hdul):
+    """
+    Parses information from spectra produced by Astrocook
+    """
+    data = hdul[1].data
+
+    wave = data.x*10
+    flux = data.y
+    error = flux*0.01
+
+    nanwave = np.isfinite(wave)
+    flux[np.isnan(flux)] = np.nanmedian(flux)
+    error[np.isnan(error)] = np.inf
+
+    return (wave[nanwave].reshape(1, -1), flux[nanwave].reshape(1, -1), error[nanwave].reshape(1, -1))
 
 
 # -------------------------------- ** -------------------------------- #
