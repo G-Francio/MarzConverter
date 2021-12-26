@@ -4,7 +4,7 @@
 # and here: https://stackoverflow.com/questions/8050775/using-pythons-logging-module-to-log-all-exceptions-and-errors
 # and here: https://stackoverflow.com/questions/6234405/logging-uncaught-exceptions-in-python/16993115#16993115
 
-import logging, sys
+import logging, sys, itertools
 
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
@@ -99,7 +99,43 @@ try:
 
     # -------------------------------- ** -------------------------------- #
 
-    def getObservationData(nameList):
+    def typedict(key):
+        d = {1:"QSO", 2:"Type2", 3:"BLLac", 4:"Galaxy", 5:"Star", 6:"EmLines", 7:"Uncertain", 8:"Extended?", 9:"closeneighb"}
+        
+        try:
+            return d[key]
+        except KeyError:
+            return ""
+
+
+    def getObservationData(namelist):
+        _nameListQIDs  = [e for e in namelist if e.isdecimal()]
+        _nameListFiles = [e for e in namelist if not e.isdecimal()]
+
+        data = _getDataFromQID(_nameListQIDs)
+        if len(data) == 0:
+            return _getObservationData(_nameListFiles)
+        
+        return data
+
+
+    def _getDataFromQID(namelist):
+        if len(namelist) == 0:
+            return []
+        
+        _cred = getUserCredential()
+        
+        qidList = []
+        cur, conn = DBConnect(_cred[0], _cred[1])
+        cur.execute("SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid IN (" + ", ".join(namelist) + ")")
+        for c in cur:
+            qidList.append(tuple(list(c) + ["", "A", ""]))
+        conn.close()
+        return qidList
+
+
+
+    def _getObservationData(nameList):
         """
         Gathers data for observations that needs conversion.
         `nameList` is a list of fileNames taken from Drive/QSOCandidates.
@@ -132,12 +168,13 @@ try:
                 else:
                     fileName = fileNameList[foundIndices[0][0]]
                     cur.execute(
-                        "SELECT target_qid, RAd, DECd, objtype, z_spec, targetflag, qflag, notes FROM Qubrics.Observations WHERE file = '{}'".format(
+                        "SELECT target_qid, RAd, DECd, otypeid, z_spec, targetflag, qflag, notes FROM Qubrics.Observations WHERE file = '{}'".format(
                             fileName
                         )
                     )
                     for c in cur:
-                        observationData.append(c)
+                        c_objtype = (c[0], c[1], c[2], typedict(c[3]), c[4], c[5], c[6], c[7])
+                        observationData.append(c_objtype)
 
             conn.close()
             return np.array(observationData)
@@ -188,9 +225,9 @@ def MarzConverter(**kwargs):
     """
     args = kwargs["sysargs"]
     if (
-        any("txt" in s for s in args)
-        or any("dat" in s for s in args)
-        or any("mzc" in s for s in args)
+        any(".txt" in s for s in args)
+        or any(".dat" in s for s in args)
+        or any(".mzc" in s for s in args)
     ):
         multiFits2File(args)
     else:
@@ -219,7 +256,7 @@ def fits2File(args):
     fibreHDU = generateFibresData(specDBData)
 
     # Sets the correct outfile:
-    if len(args) == 3 and not any("wr" in s for s in args):
+    if len(args) == 3 and not any("wr=" in s.replace(" ", "") for s in args):
         args[-1] = args[-1].split(".fits")[0]
         name = args[-1] + ".fits"
     elif len(args) == 4:
@@ -281,7 +318,6 @@ def fits2array(fitsIn, waveRange=None):
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
-
     hduList = fits.open(fitsIn)
 
     wave, flux, error = parseData(hduList, fitsIn)
@@ -502,7 +538,7 @@ def generateComment(DBData):
     tf = "P" if DBData[5] == "" else DBData[5]
     qf = DBData[6]
     n = DBData[7]
-    return t + " " + z + " " + tf + qf + " - " + n
+    return str(t) + " " + str(z) + " " + tf + qf + " - " + n
 
 
 # -------------------------------- ** -------------------------------- #
