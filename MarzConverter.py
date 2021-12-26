@@ -6,8 +6,6 @@
 
 import logging, sys
 
-from astropy.io.fits.hdu import hdulist
-
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
     level=logging.DEBUG,
@@ -39,6 +37,10 @@ sys.excepthook = handle_exception
 from multiprocessing import Pool
 from astropy.io import fits
 from os import cpu_count
+from pathlib import Path
+
+home = str(Path.home())
+
 import numpy as np
 import os.path as p, re
 
@@ -88,7 +90,7 @@ try:
         Requires the cred.auth file in the same folder as MarzConverter,
         or manually setting a different path.
         """
-        with open("/home/francio/.cred.auth") as f:
+        with open(home + "/.cred.auth") as f:
             cred = f.readlines()
         return cred[0].strip("\n"), cred[1].strip("\n")
 
@@ -124,6 +126,8 @@ try:
         except KeyError:
             return ""
 
+    # -------------------------------- ** -------------------------------- #
+
     def getObservationData(namelist):
         _nameListQIDs = [e for e in namelist if e.isdecimal()]
         _nameListFiles = [e for e in namelist if not e.isdecimal()]
@@ -133,6 +137,8 @@ try:
             return _getObservationData(_nameListFiles)
 
         return data
+
+    # -------------------------------- ** -------------------------------- #        
 
     def _getDataFromQID(namelist):
         if len(namelist) == 0:
@@ -151,6 +157,8 @@ try:
             qidList.append(tuple(list(c) + ["", "A", ""]))
         conn.close()
         return qidList
+
+    # -------------------------------- ** -------------------------------- #
 
     def _getObservationData(nameList):
         """
@@ -209,7 +217,7 @@ try:
             print(
                 "Connect to the DB before running the script for possible additional data."
             )
-            return getFallbackData(nameList)
+            return getFallbackData(nameList)           
 
 except ModuleNotFoundError:
     print("MariaDB module not found, fallback on mock data.")
@@ -255,10 +263,10 @@ def MarzConverter(**kwargs):
         or argd["infile"].endswith(".dat")
         or argd["infile"].endswith(".mzc")
     ):
-        if argd["npool"] is None:
-            multiFits2File(argd)
-        else:
+        if argd["pooling"]:
             multiFits2FilePooled(argd)
+        else:
+            multiFits2File(argd)
     else:
         fits2File(argd)
 
@@ -270,15 +278,15 @@ def MarzConverter(**kwargs):
 
 def parseExtArguments(args):
     """Parses optional arguments for better handling and less issues with filenames and extensions."""
-    outd = {"infile": args[1], "wr": None, "outfile": None, "npool": None}
+    outd = {"infile": args[1], "wr": None, "outfile": None, 'pooling':False, "npool": NCPU}
     allowedKeys = list(outd.keys())
     if len(args) > 2:
         for arg in args[2:]:
-            if arg not in allowedKeys:
+            k, v = arg.replace(" ", "").split("=")
+            if k not in allowedKeys:
                 raise ValueError(
                     "Unknown optional argument. Valid options: wr, npool, outfile.\nCall as, e.g., 'MarzConverter infile npool=6'."
                 )
-            k, v = arg.replace(" ", "").split("=")
             outd[k] = v
     return outd
 
@@ -375,7 +383,7 @@ def multiFits2FilePooled(argd):
     waveList, fluxList, errorList, nameList = [], [], [], []
     specFiles = readSpecList(argd["infile"])
 
-    pool = int(argd["npool"])
+    pool = Pool(int(argd["npool"]))
     r = list(tqdm(pool.imap(_addToList, specFiles)))
 
     for _r in r:
@@ -407,10 +415,8 @@ def fits2array(fitsIn, waveRange=None):
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
-    hduList = fits.open(fitsIn)
-
-    wave, flux, error = parseData(hduList, fitsIn)
-    hduList.close()
+    with fits.open(fitsIn) as hduList:
+        wave, flux, error = parseData(hduList, fitsIn)
 
     if waveRange is not None:
         return cutWavelength(wave, flux, error, waveRange)
