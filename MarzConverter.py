@@ -6,6 +6,8 @@
 
 import logging, sys
 
+from astropy.io.fits.hdu import hdulist
+
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
     level=logging.DEBUG,
@@ -42,7 +44,9 @@ import os.path as p, re
 
 from tqdm import tqdm
 
-NCPU = cpu_count() # Currently hardcoded to use half of max threads/cpus. Will find a better way.
+NCPU = (
+    cpu_count()
+)  # Currently hardcoded to use half of max threads/cpus. Will find a better way.
 
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
@@ -103,40 +107,50 @@ try:
     # -------------------------------- ** -------------------------------- #
 
     def typedict(key):
-        d = {1:"QSO", 2:"Type2", 3:"BLLac", 4:"Galaxy", 5:"Star", 6:"EmLines", 7:"Uncertain", 8:"Extended?", 9:"closeneighb"}
-        
+        d = {
+            1: "QSO",
+            2: "Type2",
+            3: "BLLac",
+            4: "Galaxy",
+            5: "Star",
+            6: "EmLines",
+            7: "Uncertain",
+            8: "Extended?",
+            9: "closeneighb",
+        }
+
         try:
             return d[key]
         except KeyError:
             return ""
 
-
     def getObservationData(namelist):
-        _nameListQIDs  = [e for e in namelist if e.isdecimal()]
+        _nameListQIDs = [e for e in namelist if e.isdecimal()]
         _nameListFiles = [e for e in namelist if not e.isdecimal()]
 
         data = _getDataFromQID(_nameListQIDs)
         if len(data) == 0:
             return _getObservationData(_nameListFiles)
-        
-        return data
 
+        return data
 
     def _getDataFromQID(namelist):
         if len(namelist) == 0:
             return []
-        
+
         _cred = getUserCredential()
-        
+
         qidList = []
         cur, conn = DBConnect(_cred[0], _cred[1])
-        cur.execute("SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid IN (" + ", ".join(namelist) + ")")
+        cur.execute(
+            "SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid IN ("
+            + ", ".join(namelist)
+            + ")"
+        )
         for c in cur:
             qidList.append(tuple(list(c) + ["", "A", ""]))
         conn.close()
         return qidList
-
-
 
     def _getObservationData(nameList):
         """
@@ -176,7 +190,16 @@ try:
                         )
                     )
                     for c in cur:
-                        c_objtype = (c[0], c[1], c[2], typedict(c[3]), c[4], c[5], c[6], c[7])
+                        c_objtype = (
+                            c[0],
+                            c[1],
+                            c[2],
+                            typedict(c[3]),
+                            c[4],
+                            c[5],
+                            c[6],
+                            c[7],
+                        )
                         observationData.append(c_objtype)
 
             conn.close()
@@ -226,71 +249,86 @@ def MarzConverter(**kwargs):
     If no `wr` or outfile are given the outfile will be called `infile_Marz.fits`;
     moreover, the initial `wr` will be used.
     """
-    print(kwargs)
-    args = kwargs["sysargs"]
+    argd = parseExtArguments(kwargs["sysargs"])
     if (
-        any(".txt" in s for s in args)
-        or any(".dat" in s for s in args)
-        or any(".mzc" in s for s in args)
+        (argd["infile"].endswith(".txt"))
+        or argd["infile"].endswith(".dat")
+        or argd["infile"].endswith(".mzc")
     ):
-        multiFits2FilePooled(args)
+        if argd["npool"] is None:
+            multiFits2File(argd)
+        else:
+            multiFits2FilePooled(argd)
     else:
-        fits2File(args)
+        fits2File(argd)
 
 
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
 # -------------------------------- ** -------------------------------- #
 
-def parseOptionalArguments(args):
-    pass
+
+def parseExtArguments(args):
+    """Parses optional arguments for better handling and less issues with filenames and extensions."""
+    outd = {"infile": args[1], "wr": None, "outfile": None, "npool": None}
+    allowedKeys = list(outd.keys())
+    if len(args) > 2:
+        for arg in args[2:]:
+            if arg not in allowedKeys:
+                raise ValueError(
+                    "Unknown optional argument. Valid options: wr, npool, outfile.\nCall as, e.g., 'MarzConverter infile npool=6'."
+                )
+            k, v = arg.replace(" ", "").split("=")
+            outd[k] = v
+    return outd
 
 
-def fits2File(args):
+def fits2File(argd):
     """
     Reads a FITS file and calls the appropriate function.
     Writes the resulting FITS to file, ready for MARZ.
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
-    fitsIn = args[1]
-    waveRange = parseWR(args[2]) if any("wr" in s for s in args) else None
+    fitsIn = argd["infile"]
 
     path, _ = p.splitext(fitsIn)
-    name = path.split("/")[-1] + "_Marz.fits"
+    # Sets the correct outfile:
+    name = (
+        argd["outfile"]
+        if argd["outfile"] is not None
+        else path.split("/")[-1] + "_Marz.fits"
+    )
 
     specDBData = getObservationData([path.split("/")[-1]])
     fibreHDU = generateFibresData(specDBData)
 
-    # Sets the correct outfile:
-    if len(args) == 3 and not any("wr=" in s.replace(" ", "") for s in args):
-        args[-1] = args[-1].split(".fits")[0]
-        name = args[-1] + ".fits"
-    elif len(args) == 4:
-        args[-1] = args[-1].split("fits")[0]
-        name = args[-1] + ".fits"
+    with fits.open(fitsIn) as hduList:
+        wave, flux, error = parseData(hduList, fitsIn)
 
-    hduList = fits.open(fitsIn)
-
-    wave, flux, error = parseData(hduList, fitsIn)
-    hduList.close()
-
+    waveRange = parseWR(argd["wr"]) if argd["wr"] is not None else None
     if waveRange is not None:
         wave, flux, error = cutWavelength(wave, flux, error, waveRange)
 
     writeFits(flux, error, wave, fibre=fibreHDU, name=name)
 
+
 # -------------------------------- ** -------------------------------- #
 
-def multiFits2File(args):
+
+def multiFits2File(argd):
     """
     Reads a file list and calls the appropriate function for each fits.
     """
-    path, _ = p.splitext(args[1])
-    name = path.split("/")[-1] + "_Marz.fits" if len(args) < 3 else args[2] + ".fits"
+    path, _ = p.splitext(argd["infile"])
+    name = (
+        argd["outfile"] + ".fits"
+        if argd["outfile"] is not None
+        else path.split("/")[-1] + "_Marz.fits"
+    )
 
     waveList, fluxList, errorList, nameList = [], [], [], []
-    specFiles = readSpecList(args[1])
+    specFiles = readSpecList(argd["infile"])
 
     for spec in tqdm(specFiles):
         specFileName = p.splitext(spec[0])[0].split("/")[-1]
@@ -312,7 +350,9 @@ def multiFits2File(args):
 
     writeFits(fluxList, errorList, waveList, fibre=fibreHDU, name=name)
 
+
 # -------------------------------- ** -------------------------------- #
+
 
 def _addToList(spec):
     specFileName = p.splitext(spec[0])[0].split("/")[-1]
@@ -320,18 +360,22 @@ def _addToList(spec):
     return specFileName, wave, flux, error
 
 
-def multiFits2FilePooled(args):
+def multiFits2FilePooled(argd):
     """
     Reads a file list and calls the appropriate function for each fits.
     """
 
-    path, _ = p.splitext(args[1])
-    name = path.split("/")[-1] + "_Marz.fits" if len(args) < 3 else args[2] + ".fits"
+    path, _ = p.splitext(argd["infile"])
+    name = (
+        argd["outfile"] + ".fits"
+        if argd["outfile"] is not None
+        else path.split("/")[-1] + "_Marz.fits"
+    )
 
     waveList, fluxList, errorList, nameList = [], [], [], []
-    specFiles = readSpecList(args[1])
+    specFiles = readSpecList(argd["infile"])
 
-    pool = Pool(NCPU//2)
+    pool = int(argd["npool"])
     r = list(tqdm(pool.imap(_addToList, specFiles)))
 
     for _r in r:
@@ -352,7 +396,9 @@ def multiFits2FilePooled(args):
 
     writeFits(fluxList, errorList, waveList, fibre=fibreHDU, name=name)
 
+
 # -------------------------------- ** -------------------------------- #
+
 
 def fits2array(fitsIn, waveRange=None):
     """
@@ -400,7 +446,7 @@ def parseData(hdul, fileName):
     except KeyError:
         origin = None
 
-    if origin is not None and origin == 'Astrocook':
+    if origin is not None and origin == "Astrocook":
         return parseAstrocook(hdul)
 
     if inst is None:
@@ -757,7 +803,7 @@ def parseLAMOST(hdul):
     error = vectRevIVar(data[1, :], max(flux)).reshape(1, -1)
 
     return (wave, flux, error)
-    
+
 
 def parseAstrocook(hdul):
     """
@@ -765,15 +811,19 @@ def parseAstrocook(hdul):
     """
     data = hdul[1].data
 
-    wave = data.x*10
+    wave = data.x * 10
     flux = data.y
-    error = flux*0.01
+    error = flux * 0.01
 
     nanwave = np.isfinite(wave)
     flux[np.isnan(flux)] = np.nanmedian(flux)
     error[np.isnan(error)] = np.inf
 
-    return (wave[nanwave].reshape(1, -1), flux[nanwave].reshape(1, -1), error[nanwave].reshape(1, -1))
+    return (
+        wave[nanwave].reshape(1, -1),
+        flux[nanwave].reshape(1, -1),
+        error[nanwave].reshape(1, -1),
+    )
 
 
 # -------------------------------- ** -------------------------------- #
@@ -781,4 +831,4 @@ def parseAstrocook(hdul):
 # -------------------------------- ** -------------------------------- #
 
 if __name__ == "__main__":
-    MarzConverter(sysargs = sys.argv)
+    MarzConverter(sysargs=sys.argv)
