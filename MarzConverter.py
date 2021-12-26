@@ -607,7 +607,8 @@ def generateFibresData(DBData):
     t = ["P"] * len(DBData)
 
     for data in DBData:
-        name.append(data[0])
+        z_name = data[4] if data[4] is not None else -1
+        name.append(str(data[0]) + ' - ' + str(round(z_name, 2)))
         ra.append(str(float(data[1]) * np.pi / 180))
         dec.append(str(float(data[2]) * np.pi / 180))
         comm.append(generateComment(data))
