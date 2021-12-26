@@ -4,7 +4,7 @@
 # and here: https://stackoverflow.com/questions/8050775/using-pythons-logging-module-to-log-all-exceptions-and-errors
 # and here: https://stackoverflow.com/questions/6234405/logging-uncaught-exceptions-in-python/16993115#16993115
 
-import logging, sys, itertools
+import logging, sys
 
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
@@ -34,15 +34,18 @@ sys.excepthook = handle_exception
 # #################################################################### #
 # -------------------------------- ** -------------------------------- #
 
+from multiprocessing import Pool
 from astropy.io import fits
+from os import cpu_count
 import numpy as np
 import os.path as p, re
 
 from tqdm import tqdm
 
+NCPU = cpu_count() # Currently hardcoded to use half of max threads/cpus. Will find a better way.
+
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
-# TODO: Centre on screen if cut wave -> Theoretically correct, in practice does not work
 
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
@@ -223,13 +226,14 @@ def MarzConverter(**kwargs):
     If no `wr` or outfile are given the outfile will be called `infile_Marz.fits`;
     moreover, the initial `wr` will be used.
     """
+    print(kwargs)
     args = kwargs["sysargs"]
     if (
         any(".txt" in s for s in args)
         or any(".dat" in s for s in args)
         or any(".mzc" in s for s in args)
     ):
-        multiFits2File(args)
+        multiFits2FilePooled(args)
     else:
         fits2File(args)
 
@@ -237,6 +241,9 @@ def MarzConverter(**kwargs):
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
 # -------------------------------- ** -------------------------------- #
+
+def parseOptionalArguments(args):
+    pass
 
 
 def fits2File(args):
@@ -273,9 +280,7 @@ def fits2File(args):
 
     writeFits(flux, error, wave, fibre=fibreHDU, name=name)
 
-
 # -------------------------------- ** -------------------------------- #
-
 
 def multiFits2File(args):
     """
@@ -307,9 +312,47 @@ def multiFits2File(args):
 
     writeFits(fluxList, errorList, waveList, fibre=fibreHDU, name=name)
 
-
 # -------------------------------- ** -------------------------------- #
 
+def _addToList(spec):
+    specFileName = p.splitext(spec[0])[0].split("/")[-1]
+    wave, flux, error = fits2array(spec[0], waveRange=spec[1])
+    return specFileName, wave, flux, error
+
+
+def multiFits2FilePooled(args):
+    """
+    Reads a file list and calls the appropriate function for each fits.
+    """
+
+    path, _ = p.splitext(args[1])
+    name = path.split("/")[-1] + "_Marz.fits" if len(args) < 3 else args[2] + ".fits"
+
+    waveList, fluxList, errorList, nameList = [], [], [], []
+    specFiles = readSpecList(args[1])
+
+    pool = Pool(NCPU//2)
+    r = list(tqdm(pool.imap(_addToList, specFiles)))
+
+    for _r in r:
+        nameList.append(_r[0])
+        waveList.append(_r[1])
+        fluxList.append(_r[2])
+        errorList.append(_r[3])
+
+    specDBData = getObservationData(nameList)
+    fibreHDU = generateFibresData(specDBData)
+
+    maxShape = max([s.shape[1] for s in waveList])
+    waveList, fluxList, errorList = padArray(
+        waveList, fluxList, errorList, maxLength=maxShape
+    )
+
+    completeWave(waveList)
+
+    writeFits(fluxList, errorList, waveList, fibre=fibreHDU, name=name)
+
+# -------------------------------- ** -------------------------------- #
 
 def fits2array(fitsIn, waveRange=None):
     """
@@ -509,9 +552,10 @@ def generateFibresData(DBData):
     data are generated on the fly (e.g. ra/dec = 0/0, `z_spec = -`)
     """
     name, t, ra, dec, comm = [], [], [], [], []
+    t = ["P"] * len(DBData)
+
     for data in DBData:
         name.append(data[0])
-        t.append("P")
         ra.append(str(float(data[1]) * np.pi / 180))
         dec.append(str(float(data[2]) * np.pi / 180))
         comm.append(generateComment(data))
@@ -737,4 +781,4 @@ def parseAstrocook(hdul):
 # -------------------------------- ** -------------------------------- #
 
 if __name__ == "__main__":
-    MarzConverter(sysargs=sys.argv)
+    MarzConverter(sysargs = sys.argv)
