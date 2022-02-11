@@ -4,7 +4,7 @@
 # and here: https://stackoverflow.com/questions/8050775/using-pythons-logging-module-to-log-all-exceptions-and-errors
 # and here: https://stackoverflow.com/questions/6234405/logging-uncaught-exceptions-in-python/16993115#16993115
 
-import logging, sys, warnings
+import logging, sys, warnings, getpass
 
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
@@ -53,6 +53,9 @@ NCPU = (
 USER = None
 PWD  = None
 
+def getCurrentUser():
+    return USER, PWD
+
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
 
@@ -87,13 +90,15 @@ def getFallbackDataSingle(name):
 try:
     import mariadb as mdb
 
-    def getUserCredential(user = USER, pwd = PWD):
+    def getUserCredential():
         """
         Read user credentials for QubricsDB.
         """
+        user, pwd = getCurrentUser()
+
         if user is None or pwd is None:
             user = input("Username: ")
-            pwd  = input("Password: ")
+            pwd  = getpass.getpass("Password: ")
         return user, pwd
 
     USER, PWD = getUserCredential()
@@ -438,7 +443,6 @@ def fits2array(fitsIn, waveRange=None):
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
-    print(fitsIn)
     with fits.open(fitsIn) as hduList:
         wave, flux, error = parseData(hduList)
 
