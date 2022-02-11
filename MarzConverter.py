@@ -4,7 +4,7 @@
 # and here: https://stackoverflow.com/questions/8050775/using-pythons-logging-module-to-log-all-exceptions-and-errors
 # and here: https://stackoverflow.com/questions/6234405/logging-uncaught-exceptions-in-python/16993115#16993115
 
-import logging, sys
+import logging, sys, warnings
 
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
@@ -48,7 +48,10 @@ from tqdm import tqdm
 
 NCPU = (
     cpu_count()
-)  # Currently hardcoded to use half of max threads/cpus. Will find a better way.
+)
+
+USER = None
+PWD  = None
 
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
@@ -84,16 +87,17 @@ def getFallbackDataSingle(name):
 try:
     import mariadb as mdb
 
-    def getUserCredential():
+    def getUserCredential(user = USER, pwd = PWD):
         """
         Read user credentials for QubricsDB.
-        Requires the cred.auth file in the same folder as MarzConverter,
-        or manually setting a different path.
         """
-        with open(home + "/.cred.auth") as f:
-            cred = f.readlines()
-        return cred[0].strip("\n"), cred[1].strip("\n")
+        if user is None or pwd is None:
+            user = input("Username: ")
+            pwd  = input("Password: ")
+        return user, pwd
 
+    USER, PWD = getUserCredential()
+    
     # -------------------------------- ** -------------------------------- #
 
     def DBConnect(user, pw):
@@ -129,6 +133,10 @@ try:
     # -------------------------------- ** -------------------------------- #
 
     def getObservationData(namelist):
+        """
+        Queries the DB for complementary information available per target.
+        Will either find data based on the QID or, if observed by us, from the named spectrum.
+        """
         _nameListQIDs = [e for e in namelist if e.isdecimal()]
         _nameListFiles = [e for e in namelist if not e.isdecimal()]
 
@@ -141,22 +149,37 @@ try:
     # -------------------------------- ** -------------------------------- #        
 
     def _getDataFromQID(namelist):
+        """
+        Queries the DB is the name is numerical (and thus a qid).
+        This allows to download complementary informations even if the target is not from
+        our observations but from literature.
+        """
         if len(namelist) == 0:
             return []
 
         _cred = getUserCredential()
+        cur, conn = DBConnect(_cred[0], _cred[1])
 
         qidList = []
-        cur, conn = DBConnect(_cred[0], _cred[1])
-        cur.execute(
-            "SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid IN ("
-            + ", ".join(namelist)
-            + ")"
-        )
-        for c in cur:
-            qidList.append(tuple(list(c) + ["", "A", ""]))
+
+        # Can't query all info at once, in the unlikely case that a numerical name is not in the DB.
+        # Also, this will return wrong info in that case. Can't do anything about it, need to check
+        #  beforehand!
+
+        for _qid in namelist:
+            cur.execute("SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid = ?", (_qid,))
+            queryRes = [*cur]
+            # Check if I get exactly one result out of the query
+            if len(queryRes) == 1:
+                qidList.append(np.array([*queryRes[0]] + ["", "A", ""]))
+            elif len(queryRes) == 0:
+                qidList.append(getFallbackDataSingle(_qid))
+            elif len(queryRes) > 1:
+                warnings.warn("Too many results from query, this should never happen!\nUsing fallback data.")
+
         conn.close()
-        return qidList
+
+        return np.array(qidList)
 
     # -------------------------------- ** -------------------------------- #
 
@@ -285,7 +308,7 @@ def parseExtArguments(args):
             k, v = arg.replace(" ", "").split("=")
             if k not in allowedKeys:
                 raise ValueError(
-                    "Unknown optional argument. Valid options: wr, npool, outfile.\nCall as, e.g., 'MarzConverter infile npool=6'."
+                    "Unknown optional argument. Valid options: wr, pooling [T/F], npool [NCPU], outfile.\nCall as, e.g., 'MarzConverter infile npool=6'."
                 )
             outd[k] = v
     return outd
@@ -312,7 +335,7 @@ def fits2File(argd):
     fibreHDU = generateFibresData(specDBData)
 
     with fits.open(fitsIn) as hduList:
-        wave, flux, error = parseData(hduList, fitsIn)
+        wave, flux, error = parseData(hduList)
 
     waveRange = parseWR(argd["wr"]) if argd["wr"] is not None else None
     if waveRange is not None:
@@ -415,8 +438,9 @@ def fits2array(fitsIn, waveRange=None):
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
+    print(fitsIn)
     with fits.open(fitsIn) as hduList:
-        wave, flux, error = parseData(hduList, fitsIn)
+        wave, flux, error = parseData(hduList)
 
     if waveRange is not None:
         return cutWavelength(wave, flux, error, waveRange)
@@ -429,7 +453,7 @@ def fits2array(fitsIn, waveRange=None):
 # -------------------------------- ** -------------------------------- #
 
 
-def parseData(hdul, fileName):
+def parseData(hdul):
     """
     Parses a FITS file given the instrument name.
     Very likely to fail if the fits is non standard, please report the log files
@@ -459,7 +483,7 @@ def parseData(hdul, fileName):
         return parseGeneric(hdul)
     elif inst == "WFCCD/WF4K-1":
         return parseWFCCD(hdul)
-    elif re.search("LDSS3-.*", inst) is not None:
+    elif re.search("LDSS3-.*", inst) is not None or inst == "MagE":
         return parseLDSS3(hdul)
     elif inst == "IMACS Short-Camera":
         return parseIMACS(hdul)
@@ -473,6 +497,8 @@ def parseData(hdul, fileName):
         return parseSDSS(hdul)
     elif inst == "LAMOST":
         return parseLAMOST(hdul)
+    elif inst == "SuperCOSMOS I":
+        return parse6DF(hdul)
     else:
         print("Can't parse fits file, please report log file (/tmp/MarzConverter.log)")
 
@@ -596,6 +622,13 @@ def parseWR(str):
 
 # -------------------------------- ** -------------------------------- #
 
+def is_number(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
 
 def generateFibresData(DBData):
     """
@@ -607,7 +640,7 @@ def generateFibresData(DBData):
     t = ["P"] * len(DBData)
 
     for data in DBData:
-        z_name = data[4] if data[4] is not None else -1
+        z_name = float(data[4]) if is_number(data[4]) else -1
         name.append(str(data[0]) + ' - ' + str(round(z_name, 2)))
         ra.append(str(float(data[1]) * np.pi / 180))
         dec.append(str(float(data[2]) * np.pi / 180))
@@ -832,6 +865,16 @@ def parseAstrocook(hdul):
         error[nanwave].reshape(1, -1),
     )
 
+def parse6DF(hdul):
+    """
+    Parses information from spectra downloaded by 6dfGS
+    """
+    data = hdul[7].data
+
+    wave = data[3]
+    flux = data[0]
+    error = flux * .1
+    return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
 
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
