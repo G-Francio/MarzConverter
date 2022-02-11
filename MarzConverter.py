@@ -97,7 +97,7 @@ try:
         return user, pwd
 
     USER, PWD = getUserCredential()
-    
+
     # -------------------------------- ** -------------------------------- #
 
     def DBConnect(user, pw):
@@ -308,7 +308,7 @@ def parseExtArguments(args):
             k, v = arg.replace(" ", "").split("=")
             if k not in allowedKeys:
                 raise ValueError(
-                    "Unknown optional argument. Valid options: wr, pooling [T/F], npool [NCPU], outfile.\nCall as, e.g., 'MarzConverter infile npool=6'."
+                    "Unknown optional argument. Valid options: wr [None], outfile [None], pooling [T/F], npool [NCPU].\nCall as, e.g., 'MarzConverter infile npool=6'."
                 )
             outd[k] = v
     return outd
