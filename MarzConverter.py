@@ -626,7 +626,9 @@ def parseWR(str):
 
 # -------------------------------- ** -------------------------------- #
 
-def is_number(s):
+def isNumber(s):
+    if s is None:
+        return False
     try:
         float(s)
         return True
@@ -644,7 +646,7 @@ def generateFibresData(DBData):
     t = ["P"] * len(DBData)
 
     for data in DBData:
-        z_name = float(data[4]) if is_number(data[4]) else -1
+        z_name = float(data[4]) if isNumber(data[4]) else -1
         name.append(str(data[0]) + ' - ' + str(round(z_name, 2)))
         ra.append(str(float(data[1]) * np.pi / 180))
         dec.append(str(float(data[2]) * np.pi / 180))
