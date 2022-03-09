@@ -53,7 +53,6 @@ PWD = None
 
 QUBRICSACCESS = False
 
-
 def getCurrentUser():
     return USER, PWD
 
@@ -306,6 +305,7 @@ def MarzConverter(**kwargs):
     moreover, the initial `wr` will be used.
     """
     argd = parseExtArguments(kwargs["sysargs"])
+
     if (
         (argd["infile"].endswith(".txt"))
         or argd["infile"].endswith(".dat")
@@ -326,12 +326,16 @@ def MarzConverter(**kwargs):
 
 def parseExtArguments(args):
     """Parses optional arguments for better handling and less issues with filenames and extensions."""
+
+    global QUBRICSACCESS
+
     outd = {
         "infile": args[1],
         "wr": None,
         "outfile": None,
         "pooling": False,
         "npool": NCPU // 2,
+        "qaccess" : False
     }
     allowedKeys = list(outd.keys())
     if len(args) > 2:
@@ -342,6 +346,8 @@ def parseExtArguments(args):
                     "Unknown optional argument. Valid options: wr [None], outfile [None], pooling [T/F], npool [NCPU].\nCall as, e.g., 'MarzConverter infile npool=6'."
                 )
             outd[k] = v
+
+    QUBRICSACCESS = outd["qaccess"]
     return outd
 
 
@@ -470,7 +476,6 @@ def fits2array(fitsIn, waveRange=None):
     of the original flux.
     """
     with fits.open(fitsIn) as hduList:
-        print(fitsIn)
         wave, flux, error = parseData(hduList)
 
     if waveRange is not None:
