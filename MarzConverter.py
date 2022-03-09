@@ -46,15 +46,17 @@ import os.path as p, re
 
 from tqdm import tqdm
 
-NCPU = (
-    cpu_count()
-)
+NCPU = cpu_count()
 
 USER = None
-PWD  = None
+PWD = None
+
+QUBRICSACCESS = False
+
 
 def getCurrentUser():
     return USER, PWD
+
 
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
@@ -94,11 +96,14 @@ try:
         """
         Read user credentials for QubricsDB.
         """
+        if not QUBRICSACCESS:
+            return None, None
+
         user, pwd = getCurrentUser()
 
         if user is None or pwd is None:
             user = input("Username: ")
-            pwd  = getpass.getpass("Password: ")
+            pwd = getpass.getpass("Password: ")
         return user, pwd
 
     USER, PWD = getUserCredential()
@@ -142,7 +147,10 @@ try:
         Queries the DB for complementary information available per target.
         Will either find data based on the QID or, if observed by us, from the named spectrum.
         """
-        _nameListQIDs = [e for e in namelist if e.isdecimal()]
+
+        _nameListQIDs = [
+            e for e in namelist if (e.isdecimal() or e.split("_")[0].isdecimal())
+        ]
         _nameListFiles = [e for e in namelist if not e.isdecimal()]
 
         data = _getDataFromQID(_nameListQIDs)
@@ -151,38 +159,50 @@ try:
 
         return data
 
-    # -------------------------------- ** -------------------------------- #        
+    # -------------------------------- ** -------------------------------- #
 
-    def _getDataFromQID(namelist):
+    def _getDataFromQID(nameList):
         """
         Queries the DB is the name is numerical (and thus a qid).
         This allows to download complementary informations even if the target is not from
         our observations but from literature.
         """
-        if len(namelist) == 0:
+        if len(nameList) == 0:
             return []
 
-        _cred = getUserCredential()
-        cur, conn = DBConnect(_cred[0], _cred[1])
+        try:
+            _cred = getUserCredential()
+            cur, conn = DBConnect(_cred[0], _cred[1])
 
-        qidList = []
+            qidList = []
 
-        # Can't query all info at once, in the unlikely case that a numerical name is not in the DB.
-        # Also, this will return wrong info in that case. Can't do anything about it, need to check
-        #  beforehand!
+            # Can't query all info at once, in the unlikely case that a numerical name is not in the DB.
+            # Also, this will return wrong info in that case. Can't do anything about it, need to check
+            #  beforehand!
 
-        for _qid in namelist:
-            cur.execute("SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid = ?", (_qid,))
-            queryRes = [*cur]
-            # Check if I get exactly one result out of the query
-            if len(queryRes) == 1:
-                qidList.append(np.array([*queryRes[0]] + ["", "A", ""]))
-            elif len(queryRes) == 0:
-                qidList.append(getFallbackDataSingle(_qid))
-            elif len(queryRes) > 1:
-                warnings.warn("Too many results from query, this should never happen!\nUsing fallback data.")
+            for _qid in nameList:
+                cur.execute(
+                    "SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid = ?",
+                    (_qid,),
+                )
+                queryRes = [*cur]
+                # Check if I get exactly one result out of the query, otherwise error out
+                if len(queryRes) == 1:
+                    qidList.append(np.array([*queryRes[0]] + ["", "A", ""]))
+                elif len(queryRes) == 0:
+                    qidList.append(getFallbackDataSingle(_qid))
+                elif len(queryRes) > 1:
+                    warnings.warn(
+                        "Too many results from query, this should never happen!\nUsing fallback data."
+                    )
 
-        conn.close()
+            conn.close()
+        except mdb.OperationalError:
+            print("Connection to the DB failed, mock data will be used")
+            print(
+                "Connect to the DB before running the script for possible additional data."
+            )
+            return getFallbackData(nameList)
 
         return np.array(qidList)
 
@@ -245,7 +265,7 @@ try:
             print(
                 "Connect to the DB before running the script for possible additional data."
             )
-            return getFallbackData(nameList)           
+            return getFallbackData(nameList)
 
 except ModuleNotFoundError:
     print("MariaDB module not found, fallback on mock data.")
@@ -306,7 +326,13 @@ def MarzConverter(**kwargs):
 
 def parseExtArguments(args):
     """Parses optional arguments for better handling and less issues with filenames and extensions."""
-    outd = {"infile": args[1], "wr": None, "outfile": None, 'pooling':False, "npool": NCPU}
+    outd = {
+        "infile": args[1],
+        "wr": None,
+        "outfile": None,
+        "pooling": False,
+        "npool": NCPU // 2,
+    }
     allowedKeys = list(outd.keys())
     if len(args) > 2:
         for arg in args[2:]:
@@ -444,6 +470,7 @@ def fits2array(fitsIn, waveRange=None):
     of the original flux.
     """
     with fits.open(fitsIn) as hduList:
+        print(fitsIn)
         wave, flux, error = parseData(hduList)
 
     if waveRange is not None:
@@ -501,8 +528,13 @@ def parseData(hdul):
         return parseSDSS(hdul)
     elif inst == "LAMOST":
         return parseLAMOST(hdul)
+    # 6df and 2df are problematic, I should merge them
+    # TODO: merge these functions.
+    # Future me problem tho
     elif inst == "SuperCOSMOS I":
         return parse6DF(hdul)
+    elif inst == "2dF" or inst == "6dF":
+        return parse2DF(hdul)
     else:
         print("Can't parse fits file, please report log file (/tmp/MarzConverter.log)")
 
@@ -577,6 +609,9 @@ def readSpecList(fileIn):
 
     spec2Convert = []
     for data in readData:
+        # Hardcodes .fits/.fit as only acceptable format
+        if not (data.endswith(".fits") or data.endswith(".fit")):
+            continue
         splitArgs = data.split("wr")
         spec = splitArgs[0].strip(' "')
         wr = parseWR(splitArgs[1]) if len(splitArgs) > 1 else None
@@ -626,6 +661,7 @@ def parseWR(str):
 
 # -------------------------------- ** -------------------------------- #
 
+
 def isNumber(s):
     if s is None:
         return False
@@ -647,7 +683,7 @@ def generateFibresData(DBData):
 
     for data in DBData:
         z_name = float(data[4]) if isNumber(data[4]) else -1
-        name.append(str(data[0]) + ' - ' + str(round(z_name, 2)))
+        name.append(str(data[0]) + " - " + str(round(z_name, 2)))
         ra.append(str(float(data[1]) * np.pi / 180))
         dec.append(str(float(data[2]) * np.pi / 180))
         comm.append(generateComment(data))
@@ -871,6 +907,7 @@ def parseAstrocook(hdul):
         error[nanwave].reshape(1, -1),
     )
 
+
 def parse6DF(hdul):
     """
     Parses information from spectra downloaded by 6dfGS
@@ -879,8 +916,31 @@ def parse6DF(hdul):
 
     wave = data[3]
     flux = data[0]
-    error = flux * .1
+    error = flux * 0.1
     return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
+
+
+def parse2DF(hdul):
+    """
+    Parses information from spectra downloaded by 6dfGS
+    """
+    start = hdul[0].header["CRVAL1"]
+    step = hdul[0].header["CD1_1"]
+    total = hdul[0].header["NAXIS1"]
+    corr = hdul[0].header["CRPIX1"]
+
+    # Transform flux, should not matter for redshift identification but might
+    #  as well consider it
+    BZERO = hdul[0].header["BZERO"]
+    BSCALE = hdul[0].header["BSCALE"]
+
+    wave = (np.arange(1, total + 1) - corr) * step + start
+    flux = BSCALE * hdul[0].data + BZERO
+
+    error = hdul[2].data
+
+    return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
+
 
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
