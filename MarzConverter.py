@@ -4,7 +4,7 @@
 # and here: https://stackoverflow.com/questions/8050775/using-pythons-logging-module-to-log-all-exceptions-and-errors
 # and here: https://stackoverflow.com/questions/6234405/logging-uncaught-exceptions-in-python/16993115#16993115
 
-import logging, sys
+import logging, sys, warnings, getpass
 
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
@@ -37,12 +37,26 @@ sys.excepthook = handle_exception
 from multiprocessing import Pool
 from astropy.io import fits
 from os import cpu_count
+from pathlib import Path
+
+home = str(Path.home())
+
 import numpy as np
 import os.path as p, re
 
 from tqdm import tqdm
 
-NCPU = cpu_count() # Currently hardcoded to use half of max threads/cpus. Will find a better way.
+NCPU = cpu_count()
+
+USER = None
+PWD = None
+
+QUBRICSACCESS = False
+
+
+def getCurrentUser():
+    return USER, PWD
+
 
 # TODO: Add handling of external errors
 # TODO: Check if fallback for no INSTRUME cards is enough
@@ -81,12 +95,18 @@ try:
     def getUserCredential():
         """
         Read user credentials for QubricsDB.
-        Requires the cred.auth file in the same folder as MarzConverter,
-        or manually setting a different path.
         """
-        with open("/home/francio/.cred.auth") as f:
-            cred = f.readlines()
-        return cred[0].strip("\n"), cred[1].strip("\n")
+        if not QUBRICSACCESS:
+            return None, None
+
+        user, pwd = getCurrentUser()
+
+        if user is None or pwd is None:
+            user = input("Username: ")
+            pwd = getpass.getpass("Password: ")
+        return user, pwd
+
+    USER, PWD = getUserCredential()
 
     # -------------------------------- ** -------------------------------- #
 
@@ -103,40 +123,90 @@ try:
     # -------------------------------- ** -------------------------------- #
 
     def typedict(key):
-        d = {1:"QSO", 2:"Type2", 3:"BLLac", 4:"Galaxy", 5:"Star", 6:"EmLines", 7:"Uncertain", 8:"Extended?", 9:"closeneighb"}
-        
+        d = {
+            1: "QSO",
+            2: "Type2",
+            3: "BLLac",
+            4: "Galaxy",
+            5: "Star",
+            6: "EmLines",
+            7: "Uncertain",
+            8: "Extended?",
+            9: "closeneighb",
+        }
+
         try:
             return d[key]
         except KeyError:
             return ""
 
+    # -------------------------------- ** -------------------------------- #
 
     def getObservationData(namelist):
-        _nameListQIDs  = [e for e in namelist if e.isdecimal()]
+        """
+        Queries the DB for complementary information available per target.
+        Will either find data based on the QID or, if observed by us, from the named spectrum.
+        """
+
+        _nameListQIDs = [
+            e for e in namelist if (e.isdecimal() or e.split("_")[0].isdecimal())
+        ]
         _nameListFiles = [e for e in namelist if not e.isdecimal()]
 
         data = _getDataFromQID(_nameListQIDs)
         if len(data) == 0:
             return _getObservationData(_nameListFiles)
-        
+
         return data
 
+    # -------------------------------- ** -------------------------------- #
 
-    def _getDataFromQID(namelist):
-        if len(namelist) == 0:
+    def _getDataFromQID(nameList):
+        """
+        Queries the DB is the name is numerical (and thus a qid).
+        This allows to download complementary informations even if the target is not from
+        our observations but from literature.
+        """
+        if len(nameList) == 0:
             return []
-        
-        _cred = getUserCredential()
-        
-        qidList = []
-        cur, conn = DBConnect(_cred[0], _cred[1])
-        cur.execute("SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid IN (" + ", ".join(namelist) + ")")
-        for c in cur:
-            qidList.append(tuple(list(c) + ["", "A", ""]))
-        conn.close()
-        return qidList
 
+        try:
+            _cred = getUserCredential()
+            cur, conn = DBConnect(_cred[0], _cred[1])
 
+            qidList = []
+
+            # Can't query all info at once, in the unlikely case that a numerical name is not in the DB.
+            # Also, this will return wrong info in that case. Can't do anything about it, need to check
+            #  beforehand!
+
+            for _qid in nameList:
+                cur.execute(
+                    "SELECT qid, RAd, DECd, otypeid, z_spec FROM Qubrics.All_info WHERE qid = ?",
+                    (_qid,),
+                )
+                queryRes = [*cur]
+                # Check if I get exactly one result out of the query, otherwise error out
+                if len(queryRes) == 1:
+                    qidList.append(np.array([*queryRes[0]] + ["", "A", ""]))
+                elif len(queryRes) == 0:
+                    qidList.append(getFallbackDataSingle(_qid))
+                elif len(queryRes) > 1:
+                    warnings.warn(
+                        "Too many results from query, this should never happen!\nUsing fallback data."
+                    )
+
+            conn.close()
+        except mdb.OperationalError:
+            print("Connection to the DB failed, mock data will be used")
+            print(
+                "Connect to the DB before running the script for possible additional data."
+            )
+            return getFallbackData(nameList)
+
+        return np.array(qidList)
+
+    # -------------------------------- ** -------------------------------- #
 
     def _getObservationData(nameList):
         """
@@ -176,7 +246,16 @@ try:
                         )
                     )
                     for c in cur:
-                        c_objtype = (c[0], c[1], c[2], typedict(c[3]), c[4], c[5], c[6], c[7])
+                        c_objtype = (
+                            c[0],
+                            c[1],
+                            c[2],
+                            typedict(c[3]),
+                            c[4],
+                            c[5],
+                            c[6],
+                            c[7],
+                        )
                         observationData.append(c_objtype)
 
             conn.close()
@@ -226,71 +305,92 @@ def MarzConverter(**kwargs):
     If no `wr` or outfile are given the outfile will be called `infile_Marz.fits`;
     moreover, the initial `wr` will be used.
     """
-    print(kwargs)
-    args = kwargs["sysargs"]
+    argd = parseExtArguments(kwargs["sysargs"])
     if (
-        any(".txt" in s for s in args)
-        or any(".dat" in s for s in args)
-        or any(".mzc" in s for s in args)
+        (argd["infile"].endswith(".txt"))
+        or argd["infile"].endswith(".dat")
+        or argd["infile"].endswith(".mzc")
     ):
-        multiFits2FilePooled(args)
+        if argd["pooling"]:
+            multiFits2FilePooled(argd)
+        else:
+            multiFits2File(argd)
     else:
-        fits2File(args)
+        fits2File(argd)
 
 
 # -------------------------------- ** -------------------------------- #
 # #################################################################### #
 # -------------------------------- ** -------------------------------- #
 
-def parseOptionalArguments(args):
-    pass
+
+def parseExtArguments(args):
+    """Parses optional arguments for better handling and less issues with filenames and extensions."""
+    outd = {
+        "infile": args[1],
+        "wr": None,
+        "outfile": None,
+        "pooling": False,
+        "npool": NCPU // 2,
+    }
+    allowedKeys = list(outd.keys())
+    if len(args) > 2:
+        for arg in args[2:]:
+            k, v = arg.replace(" ", "").split("=")
+            if k not in allowedKeys:
+                raise ValueError(
+                    "Unknown optional argument. Valid options: wr [None], outfile [None], pooling [T/F], npool [NCPU].\nCall as, e.g., 'MarzConverter infile npool=6'."
+                )
+            outd[k] = v
+    return outd
 
 
-def fits2File(args):
+def fits2File(argd):
     """
     Reads a FITS file and calls the appropriate function.
     Writes the resulting FITS to file, ready for MARZ.
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
-    fitsIn = args[1]
-    waveRange = parseWR(args[2]) if any("wr" in s for s in args) else None
+    fitsIn = argd["infile"]
 
     path, _ = p.splitext(fitsIn)
-    name = path.split("/")[-1] + "_Marz.fits"
+    # Sets the correct outfile:
+    name = (
+        argd["outfile"]
+        if argd["outfile"] is not None
+        else path.split("/")[-1] + "_Marz.fits"
+    )
 
     specDBData = getObservationData([path.split("/")[-1]])
     fibreHDU = generateFibresData(specDBData)
 
-    # Sets the correct outfile:
-    if len(args) == 3 and not any("wr=" in s.replace(" ", "") for s in args):
-        args[-1] = args[-1].split(".fits")[0]
-        name = args[-1] + ".fits"
-    elif len(args) == 4:
-        args[-1] = args[-1].split("fits")[0]
-        name = args[-1] + ".fits"
+    with fits.open(fitsIn) as hduList:
+        wave, flux, error = parseData(hduList)
 
-    hduList = fits.open(fitsIn)
-
-    wave, flux, error = parseData(hduList, fitsIn)
-    hduList.close()
-
+    waveRange = parseWR(argd["wr"]) if argd["wr"] is not None else None
     if waveRange is not None:
         wave, flux, error = cutWavelength(wave, flux, error, waveRange)
 
     writeFits(flux, error, wave, fibre=fibreHDU, name=name)
 
+
 # -------------------------------- ** -------------------------------- #
 
-def multiFits2File(args):
+
+def multiFits2File(argd):
     """
     Reads a file list and calls the appropriate function for each fits.
     """
-    path, _ = p.splitext(args[1])
-    name = path.split("/")[-1] + "_Marz.fits" if len(args) < 3 else args[2] + ".fits"
+    path, _ = p.splitext(argd["infile"])
+    name = (
+        argd["outfile"] + ".fits"
+        if argd["outfile"] is not None
+        else path.split("/")[-1] + "_Marz.fits"
+    )
 
     waveList, fluxList, errorList, nameList = [], [], [], []
-    specFiles = readSpecList(args[1])
+    specFiles = readSpecList(argd["infile"])
 
     for spec in tqdm(specFiles):
         specFileName = p.splitext(spec[0])[0].split("/")[-1]
@@ -312,7 +412,9 @@ def multiFits2File(args):
 
     writeFits(fluxList, errorList, waveList, fibre=fibreHDU, name=name)
 
+
 # -------------------------------- ** -------------------------------- #
+
 
 def _addToList(spec):
     specFileName = p.splitext(spec[0])[0].split("/")[-1]
@@ -320,18 +422,22 @@ def _addToList(spec):
     return specFileName, wave, flux, error
 
 
-def multiFits2FilePooled(args):
+def multiFits2FilePooled(argd):
     """
     Reads a file list and calls the appropriate function for each fits.
     """
 
-    path, _ = p.splitext(args[1])
-    name = path.split("/")[-1] + "_Marz.fits" if len(args) < 3 else args[2] + ".fits"
+    path, _ = p.splitext(argd["infile"])
+    name = (
+        argd["outfile"] + ".fits"
+        if argd["outfile"] is not None
+        else path.split("/")[-1] + "_Marz.fits"
+    )
 
     waveList, fluxList, errorList, nameList = [], [], [], []
-    specFiles = readSpecList(args[1])
+    specFiles = readSpecList(argd["infile"])
 
-    pool = Pool(NCPU//2)
+    pool = Pool(int(argd["npool"]))
     r = list(tqdm(pool.imap(_addToList, specFiles)))
 
     for _r in r:
@@ -352,7 +458,9 @@ def multiFits2FilePooled(args):
 
     writeFits(fluxList, errorList, waveList, fibre=fibreHDU, name=name)
 
+
 # -------------------------------- ** -------------------------------- #
+
 
 def fits2array(fitsIn, waveRange=None):
     """
@@ -361,10 +469,9 @@ def fits2array(fitsIn, waveRange=None):
     If error is not found the original FITS, error is assumed .1
     of the original flux.
     """
-    hduList = fits.open(fitsIn)
-
-    wave, flux, error = parseData(hduList, fitsIn)
-    hduList.close()
+    with fits.open(fitsIn) as hduList:
+        print(fitsIn)
+        wave, flux, error = parseData(hduList)
 
     if waveRange is not None:
         return cutWavelength(wave, flux, error, waveRange)
@@ -377,7 +484,7 @@ def fits2array(fitsIn, waveRange=None):
 # -------------------------------- ** -------------------------------- #
 
 
-def parseData(hdul, fileName):
+def parseData(hdul):
     """
     Parses a FITS file given the instrument name.
     Very likely to fail if the fits is non standard, please report the log files
@@ -400,14 +507,14 @@ def parseData(hdul, fileName):
     except KeyError:
         origin = None
 
-    if origin is not None and origin == 'Astrocook':
+    if origin is not None and origin == "Astrocook":
         return parseAstrocook(hdul)
 
     if inst is None:
         return parseGeneric(hdul)
     elif inst == "WFCCD/WF4K-1":
         return parseWFCCD(hdul)
-    elif re.search("LDSS3-.*", inst) is not None:
+    elif re.search("LDSS3-.*", inst) is not None or inst == "MagE":
         return parseLDSS3(hdul)
     elif inst == "IMACS Short-Camera":
         return parseIMACS(hdul)
@@ -421,6 +528,13 @@ def parseData(hdul, fileName):
         return parseSDSS(hdul)
     elif inst == "LAMOST":
         return parseLAMOST(hdul)
+    # 6df and 2df are problematic, I should merge them
+    # TODO: merge these functions.
+    # Future me problem tho
+    elif inst == "SuperCOSMOS I":
+        return parse6DF(hdul)
+    elif inst == "2dF" or inst == "6dF":
+        return parse2DF(hdul)
     else:
         print("Can't parse fits file, please report log file (/tmp/MarzConverter.log)")
 
@@ -495,6 +609,9 @@ def readSpecList(fileIn):
 
     spec2Convert = []
     for data in readData:
+        # Hardcodes .fits/.fit as only acceptable format
+        if not (data.endswith(".fits") or data.endswith(".fit")):
+            continue
         splitArgs = data.split("wr")
         spec = splitArgs[0].strip(' "')
         wr = parseWR(splitArgs[1]) if len(splitArgs) > 1 else None
@@ -545,6 +662,16 @@ def parseWR(str):
 # -------------------------------- ** -------------------------------- #
 
 
+def isNumber(s):
+    if s is None:
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
 def generateFibresData(DBData):
     """
     Given data from QDB, produces fibre data.
@@ -555,7 +682,8 @@ def generateFibresData(DBData):
     t = ["P"] * len(DBData)
 
     for data in DBData:
-        name.append(data[0])
+        z_name = float(data[4]) if isNumber(data[4]) else -1
+        name.append(str(data[0]) + " - " + str(round(z_name, 2)))
         ra.append(str(float(data[1]) * np.pi / 180))
         dec.append(str(float(data[2]) * np.pi / 180))
         comm.append(generateComment(data))
@@ -757,7 +885,7 @@ def parseLAMOST(hdul):
     error = vectRevIVar(data[1, :], max(flux)).reshape(1, -1)
 
     return (wave, flux, error)
-    
+
 
 def parseAstrocook(hdul):
     """
@@ -765,15 +893,53 @@ def parseAstrocook(hdul):
     """
     data = hdul[1].data
 
-    wave = data.x*10
+    wave = data.x * 10
     flux = data.y
-    error = flux*0.01
+    error = flux * 0.01
 
     nanwave = np.isfinite(wave)
     flux[np.isnan(flux)] = np.nanmedian(flux)
     error[np.isnan(error)] = np.inf
 
-    return (wave[nanwave].reshape(1, -1), flux[nanwave].reshape(1, -1), error[nanwave].reshape(1, -1))
+    return (
+        wave[nanwave].reshape(1, -1),
+        flux[nanwave].reshape(1, -1),
+        error[nanwave].reshape(1, -1),
+    )
+
+
+def parse6DF(hdul):
+    """
+    Parses information from spectra downloaded by 6dfGS
+    """
+    data = hdul[7].data
+
+    wave = data[3]
+    flux = data[0]
+    error = flux * 0.1
+    return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
+
+
+def parse2DF(hdul):
+    """
+    Parses information from spectra downloaded by 6dfGS
+    """
+    start = hdul[0].header["CRVAL1"]
+    step = hdul[0].header["CD1_1"]
+    total = hdul[0].header["NAXIS1"]
+    corr = hdul[0].header["CRPIX1"]
+
+    # Transform flux, should not matter for redshift identification but might
+    #  as well consider it
+    BZERO = hdul[0].header["BZERO"]
+    BSCALE = hdul[0].header["BSCALE"]
+
+    wave = (np.arange(1, total + 1) - corr) * step + start
+    flux = BSCALE * hdul[0].data + BZERO
+
+    error = hdul[2].data
+
+    return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
 
 
 # -------------------------------- ** -------------------------------- #
@@ -781,4 +947,4 @@ def parseAstrocook(hdul):
 # -------------------------------- ** -------------------------------- #
 
 if __name__ == "__main__":
-    MarzConverter(sysargs = sys.argv)
+    MarzConverter(sysargs=sys.argv)
