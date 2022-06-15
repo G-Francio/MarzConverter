@@ -194,8 +194,9 @@ try:
                     warnings.warn(
                         "Too many results from query, this should never happen!\nUsing fallback data."
                     )
-
+                    qidList.append(getFallbackDataSingle(_qid))
             conn.close()
+            
         except mdb.OperationalError:
             print("Connection to the DB failed, mock data will be used")
             print(
@@ -651,6 +652,8 @@ def writeFits(flux, error, wave, fibre=None, name="MarzConverterOutput.fits"):
             hduListOut.close()
         else:
             hduListOut.close()
+    print("Saved to: " + name)
+    return 0
 
 
 # -------------------------------- ** -------------------------------- #
@@ -832,22 +835,14 @@ def parseLRS(hdul):
 
 def parseGeneric(hdul):
     """
-    Parses information from a generic HDU. Very likely to fail, will hopefully be improved!
+    Parses information from a generic HDU. Will fail most of the time,
+    for every fail I will try to improve the function.
     """
-    wave = []
-    flux = []
-    for w, f in hdul[1].data:
-        wave.append(w)
-        flux.append(f)
+    wave = hdul[1].data['wave'].reshape(1, -1)
+    flux = hdul[1].data['flux'].reshape(1, -1)
+    err  = hdul[1].data['err'].reshape(1, -1)
 
-    wave = np.array(wave)
-    flux = np.array(flux)
-
-    wave = np.reshape(wave, (1, wave.shape[0]))
-    flux = np.reshape(flux, (1, flux.shape[0]))
-    error = flux * 0.1
-
-    return (wave, flux, error)
+    return wave, flux, err
 
 
 def parseSDSS(hdul):
@@ -898,7 +893,7 @@ def parseAstrocook(hdul):
     """
     data = hdul[1].data
 
-    wave = data.x * 10
+    wave = data.x * 10 # Marz wants A, not nm
     flux = data.y
     error = flux * 0.01
 
