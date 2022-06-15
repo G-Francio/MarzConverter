@@ -836,7 +836,8 @@ def parseLRS(hdul):
 def parseGeneric(hdul):
     """
     Parses information from a generic HDU. Will fail most of the time,
-    for every fail I will try to improve the function.
+    for every fail I will try to improve the function. This handles
+    calibrated Gaia spectra at the minimum.
     """
     wave = hdul[1].data['wave'].reshape(1, -1)
     flux = hdul[1].data['flux'].reshape(1, -1)
