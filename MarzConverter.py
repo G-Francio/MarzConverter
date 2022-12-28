@@ -436,10 +436,14 @@ def multiFits2FilePooled(argd):
 
     path, _ = p.splitext(argd["infile"])
     name = (
-        argd["outfile"] + ".fits"
+        argd["outfile"]
         if argd["outfile"] is not None
         else path.split("/")[-1] + "_Marz.fits"
     )
+
+    # Fix the double extension issue
+    if not name.endswith(".fits"):
+        name = name + ".fits"
 
     waveList, fluxList, errorList, nameList = [], [], [], []
     specFiles = readSpecList(argd["infile"])
@@ -615,11 +619,13 @@ def readSpecList(fileIn):
 
     spec2Convert = []
     for data in readData:
-        # Hardcodes .fits/.fit as only acceptable format
-        if not (data.endswith(".fits") or data.endswith(".fit")):
-            continue
         splitArgs = data.split("wr")
         spec = splitArgs[0].strip(' "')
+        # Hardcodes .fits/.fit as only acceptable format
+        # Placing this just above is just stupid
+        if not (spec.endswith(".fits") or spec.endswith(".fit")):
+            continue
+
         wr = parseWR(splitArgs[1]) if len(splitArgs) > 1 else None
         spec2Convert.append([spec, wr])
 
