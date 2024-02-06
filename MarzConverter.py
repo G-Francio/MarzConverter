@@ -5,6 +5,7 @@
 # and here: https://stackoverflow.com/questions/6234405/logging-uncaught-exceptions-in-python/16993115#16993115
 
 import logging, sys, warnings, getpass
+import format_spec as fmt_spec
 
 logging.basicConfig(
     filename="/tmp/MarzConverter.log",
@@ -52,6 +53,7 @@ USER = None
 PWD = None
 
 QUBRICSACCESS = False
+
 
 def getCurrentUser():
     return USER, PWD
@@ -196,7 +198,7 @@ try:
                     )
                     qidList.append(getFallbackDataSingle(_qid))
             conn.close()
-            
+
         except mdb.OperationalError:
             print("Connection to the DB failed, mock data will be used")
             print(
@@ -336,7 +338,7 @@ def parseExtArguments(args):
         "outfile": None,
         "pooling": False,
         "npool": NCPU // 2,
-        "qaccess" : False
+        "qaccess": False,
     }
     allowedKeys = list(outd.keys())
     if len(args) > 2:
@@ -518,33 +520,35 @@ def parseData(hdul):
         origin = None
 
     if origin is not None and origin == "Astrocook":
-        return parseAstrocook(hdul)
+        return fmt_spec.parseAstrocook(hdul)
 
     if inst is None:
-        return parseGeneric(hdul)
+        return fmt_spec.parseGeneric(hdul)
     elif inst == "WFCCD/WF4K-1":
-        return parseWFCCD(hdul)
+        return fmt_spec.parseWFCCD(hdul)
     elif re.search("LDSS3-.*", inst) is not None or inst == "MagE":
-        return parseLDSS3(hdul)
+        return fmt_spec.parseLDSS3(hdul)
     elif inst == "IMACS Short-Camera":
-        return parseIMACS(hdul)
+        return fmt_spec.parseIMACS(hdul)
     elif inst == "FIRE":
-        return parseFIRE(hdul)
+        return fmt_spec.parseFIRE(hdul)
     elif inst == "EFOSC":
-        return parseEFOSC(hdul)
+        return fmt_spec.parseEFOSC(hdul)
     elif inst == "LRS":  # TNG
-        return parseLRS(hdul)
+        return fmt_spec.parseLRS(hdul)
     elif inst == "SDSS 2.5-M":
-        return parseSDSS(hdul)
+        return fmt_spec.parseSDSS(hdul)
     elif inst == "LAMOST":
-        return parseLAMOST(hdul)
+        return fmt_spec.parseLAMOST(hdul)
     # 6df and 2df are problematic, I should merge them
     # TODO: merge these functions.
     # Future me problem tho
     elif inst == "SuperCOSMOS I":
-        return parse6DF(hdul)
+        return fmt_spec.parse6DF(hdul)
     elif inst == "2dF" or inst == "6dF":
-        return parse2DF(hdul)
+        return fmt_spec.parse2DF(hdul)
+    elif inst == "Goodman Spectro":
+        return fmt_spec.parseGoodman(hdul)
     else:
         print("Can't parse fits file, please report log file (/tmp/MarzConverter.log)")
 
@@ -725,228 +729,6 @@ def generateComment(DBData):
     qf = DBData[6]
     n = DBData[7]
     return str(t) + " " + str(z) + " " + tf + qf + " - " + n
-
-
-# -------------------------------- ** -------------------------------- #
-# Actual FITS parsing: retrieves information based on the instrument.  #
-# Same structure, sometimes cards have different names thus different  #
-# functions.                                                           #
-# Works provided an instrument is given, otherwhise it can't set the   #
-# correct cards.                                                       #
-# -------------------------------- ** -------------------------------- #
-
-
-def parseWFCCD(hdul):
-    """
-    Parses information from a given HDU, for data produced at WFCCD
-    """
-    start = hdul[0].header["CRVAL1"]
-    step = hdul[0].header["CD1_1"]
-    total = hdul[0].header["NAXIS1"]
-    corr = hdul[0].header["CRPIX1"]
-
-    wave = (np.arange(1, total + 1) - corr) * step + start
-    wave = np.reshape(wave, (1, wave.shape[0]))
-    flux = np.reshape(hdul[0].data[0], (1, hdul[0].data[0].shape[1]))
-    error = np.reshape(hdul[0].data[1], (1, hdul[0].data[1].shape[1]))
-
-    return (wave, flux, error)
-
-
-def parseLDSS3(hdul):
-    """
-    Parses information from a given HDU, for data produced at WFCCD
-    """
-    start = hdul[0].header["CRVAL1"]
-    step = hdul[0].header["CDELT1"]
-    total = hdul[0].header["NAXIS1"]
-    corr = hdul[0].header["CRPIX1"]
-
-    wave = (np.arange(1, total + 1) - corr) * step + start
-    wave = np.reshape(wave, (1, wave.shape[0]))
-    flux = np.reshape(hdul[0].data, (1, hdul[0].data.shape[0]))
-    error = flux * 0.1
-
-    return (wave, flux, error)
-
-
-def parseIMACS(hdul):
-    """
-    Parses information from a given HDU, for data produced at IMACS
-    """
-    start = hdul[0].header["CRVAL1"]
-    step = hdul[0].header["CDELT1"]
-    total = hdul[0].header["NAXIS1"]
-    corr = hdul[0].header["CRPIX1"]
-
-    wave = (np.arange(1, total + 1) - corr) * step + start
-    wave = np.reshape(wave, (1, wave.shape[0]))
-    flux = np.reshape(hdul[0].data, (1, hdul[0].data.shape[0]))
-    error = flux * 0.1
-
-    return (wave, flux, error)
-
-
-def parseFIRE(hdul):
-    """
-    Parses information from a given HDU, for data produced at FIRE
-    """
-    data = hdul[5].data
-
-    wave = data.field("WAVE")
-    flux = data.field("FLUX")
-    error = data.field("SIG")
-
-    return (wave, flux, error)
-
-
-def parseEFOSC(hdul):
-    """
-    Parses information from a given HDU, for data produced at EFOSC
-    """
-    start = hdul[0].header["CRVAL1"]
-    step = hdul[0].header["CDELT1"]
-    total = hdul[0].header["NAXIS1"]
-    corr = hdul[0].header["CRPIX1"]
-
-    wave = (np.arange(1, total + 1) - corr) * step + start
-    wave = np.reshape(wave, (1, wave.shape[0]))
-    flux = np.reshape(hdul[0].data, (1, hdul[0].data.shape[0]))
-    error = flux * 0.1
-
-    return (wave, flux, error)
-
-
-def parseLRS(hdul):
-    """
-    Parses information from a given HDU, for data produced at TNG LRS
-    """
-    start = hdul[0].header["CRVAL1"]
-    step = hdul[0].header["CDELT1"]
-    total = hdul[0].header["NAXIS1"]
-    corr = hdul[0].header["CRPIX1"]
-
-    wave = (np.arange(1, total + 1) - corr) * step + start
-    r_wav = np.argwhere((wave >= 3700) & (wave <= 8000))  # reduced_wave,
-    # TNG spectra are very noisy at the extremes of the wavelength range
-
-    wave = np.reshape(wave[r_wav][:, 0], (1, wave[r_wav][:, 0].shape[0]))
-    flux = np.reshape(
-        hdul[0].data[r_wav][:, 0], (1, hdul[0].data[r_wav][:, 0].shape[0])
-    )
-    error = flux * 0.1
-
-    return (wave, flux, error)
-
-
-def parseGeneric(hdul):
-    """
-    Parses information from a generic HDU. Will fail most of the time,
-    for every fail I will try to improve the function. This handles
-    calibrated Gaia spectra at the minimum.
-    """
-    wave = hdul[1].data['wave'].reshape(1, -1)
-    flux = hdul[1].data['flux'].reshape(1, -1)
-    err  = hdul[1].data['err'].reshape(1, -1)
-
-    return wave, flux, err
-
-
-def parseSDSS(hdul):
-    """
-    Parses information from SDSS spectra.
-    """
-
-    def revIVar(x, m):
-        if x == 0:
-            return m
-        return np.sqrt(1 / x)
-
-    vectRevIVar = np.vectorize(revIVar)
-
-    data = np.array([np.array(i) for i in hdul[1].data])
-
-    flux = data[:, 0].reshape(1, -1)
-    wave = (10 ** data[:, 1]).reshape(1, -1)
-    error = vectRevIVar(data[:, 2], max(flux)).reshape(1, -1)
-
-    return (wave, flux, error)
-
-
-def parseLAMOST(hdul):
-    """
-    Parses information from LAMOST spectra.
-    """
-
-    def revIVar(x, m):
-        if x == 0 or x < 0:
-            return m
-        return np.sqrt(1 / x)
-
-    vectRevIVar = np.vectorize(revIVar)
-
-    data = np.array([np.array(i) for i in hdul[0].data])
-
-    flux = data[0, :].reshape(1, -1)
-    wave = data[2, :].reshape(1, -1)
-    error = vectRevIVar(data[1, :], max(flux)).reshape(1, -1)
-
-    return (wave, flux, error)
-
-
-def parseAstrocook(hdul):
-    """
-    Parses information from spectra produced by Astrocook
-    """
-    data = hdul[1].data
-
-    wave = data.x * 10 # Marz wants A, not nm
-    flux = data.y
-    error = flux * 0.01
-
-    nanwave = np.isfinite(wave)
-    flux[np.isnan(flux)] = np.nanmedian(flux)
-    error[np.isnan(error)] = np.inf
-
-    return (
-        wave[nanwave].reshape(1, -1),
-        flux[nanwave].reshape(1, -1),
-        error[nanwave].reshape(1, -1),
-    )
-
-
-def parse6DF(hdul):
-    """
-    Parses information from spectra downloaded by 6dfGS
-    """
-    data = hdul[7].data
-
-    wave = data[3]
-    flux = data[0]
-    error = flux * 0.1
-    return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
-
-
-def parse2DF(hdul):
-    """
-    Parses information from spectra downloaded by 6dfGS
-    """
-    start = hdul[0].header["CRVAL1"]
-    step = hdul[0].header["CD1_1"]
-    total = hdul[0].header["NAXIS1"]
-    corr = hdul[0].header["CRPIX1"]
-
-    # Transform flux, should not matter for redshift identification but might
-    #  as well consider it
-    BZERO = hdul[0].header["BZERO"]
-    BSCALE = hdul[0].header["BSCALE"]
-
-    wave = (np.arange(1, total + 1) - corr) * step + start
-    flux = BSCALE * hdul[0].data + BZERO
-
-    error = hdul[2].data
-
-    return (wave.reshape(1, -1), flux.reshape(1, -1), error.reshape(1, -1))
 
 
 # -------------------------------- ** -------------------------------- #
