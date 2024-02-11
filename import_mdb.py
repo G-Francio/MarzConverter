@@ -6,34 +6,8 @@ import numpy as np
 import classes as c
 import defaults as d
 
-user = c.QUser()
-
-
-def authenticate_user(_user=user):
-    """
-    Authenticate a user for QubricsDB.
-
-    Parameters:
-    - _user: An object representing the user. Defaults to the global 'd.user'.
-
-    Returns:
-    tuple: A tuple containing the user object and the user's password.
-
-    This function attempts to retrieve the username and password from the provided user object (_user).
-    If the username or password is not available, it prompts the user to input the username and password
-    using the 'input' and 'getpass' functions. The resulting tuple contains the user object and the password.
-    """
-
-    _uname, _pwd = _user.get_credentials()
-
-    if _uname is None or _pwd is None:
-        _user, _pwd = _user.get_credentials()
-        # This will return None, None in case the user does not have access to the qubrics DB
-
-    return _user, _pwd
-
-
-# -------------------------------- ** -------------------------------- #
+user = c.QUser(has_db_access=d.HAS_QUBRICS_ACCESS)
+print("Found `MariaDB` module.")
 
 
 def DBConnect(user, db="QDB2"):

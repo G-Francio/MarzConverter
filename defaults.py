@@ -1,16 +1,15 @@
+import os
 from importlib import util
-from os import cpu_count
-
-from numpy import array as npa
+from pathlib import Path
 
 # Check if mariadb is installed
 HAS_MDB = True if util.find_spec("mariadb") is not None else False
 
 # For multiprocessing purposes
-NCPU = cpu_count()
+NCPU = os.cpu_count()
 
 # Access to the DB
-QUBRICSACCESS = False
+HAS_QUBRICS_ACCESS = False
 
 # Types in the QUBIRCS DB
 DEFAULT_TYPE_DICT = {
@@ -34,7 +33,9 @@ DEFAULT_ARGS_DICT = {
 }
 
 COMMON_FITS_HAS_ERR = ["WFCCD/WF4K-1"]
-COMMON_FITS_NO_ERR = ["IMACS Short-Camera", "MagE", "EFOSC", "Goodman Spectro"]
+COMMON_FITS_NO_ERR = ["IMACS Short-Camera", "MagE", "EFOSC", "Goodman Spectr"]
+
+HOME = Path.home()
 
 
 # Functions
@@ -68,7 +69,7 @@ def get_default_data(nameList):
     for name in nameList:
         mockData = get_default_data_single(name)
         observation_data_fallback.append(mockData)
-    return npa(observation_data_fallback)
+    return observation_data_fallback
 
 
 def get_default_data_single(name):

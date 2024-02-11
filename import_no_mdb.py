@@ -1,7 +1,8 @@
 import classes as c
 import defaults as d
 
-user = c.QUser()
+user = c.QUser(has_db_access=d.HAS_QUBRICS_ACCESS)
+print("`MariaDB` module not found.")
 
 
 def get_observation_data(nameList):
